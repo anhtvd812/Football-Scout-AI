@@ -1,300 +1,487 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import csv
+import math
+import re
+import unicodedata
+from collections import Counter, defaultdict
+from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
-
-import pandas as pd
-
-try:
-    from thefuzz import fuzz
-except ImportError:  # pragma: no cover
-    fuzz = None
-
-try:
-    from unidecode import unidecode
-except ImportError:  # pragma: no cover
-    unidecode = None
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
-DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+ROOT_DIR = Path(__file__).resolve().parents[1]
+DATA_DIR = ROOT_DIR / "data"
+PROCESSED_DIR = DATA_DIR / "processed"
+
 FBREF_FILE = DATA_DIR / "players_data-2024_2025.csv"
 TM_PLAYERS_FILE = DATA_DIR / "players.csv"
 TM_VALUATIONS_FILE = DATA_DIR / "player_valuations.csv"
 
 SEASON_START = "2024-07-01"
 SEASON_END = "2025-06-30"
+FUZZY_THRESHOLD = 90
+MIN_MINUTES_FOR_MODEL = 450.0
 
+IDENTITY_COLUMNS = [
+    "player_id",
+    "player_name",
+    "fbref_player",
+    "age",
+    "birth_year",
+    "nation",
+    "position",
+    "position_group",
+    "squad",
+    "competition",
+    "foot",
+    "height_in_cm",
+    "market_value_eur",
+    "highest_market_value_in_eur",
+    "valuation_date",
+    "tm_match_method",
+    "tm_match_score",
+]
 
-NON_NUMERIC_COLS = {
-    "Player",
-    "Nation",
-    "Pos",
-    "Squad",
-    "Comp",
-}
-
-PER90_COLS = [
+BASE_FEATURES = [
+    "MP",
+    "Starts",
+    "Min",
+    "90s",
     "Gls",
     "Ast",
     "G+A",
     "G-PK",
     "PK",
     "PKatt",
+    "CrdY",
+    "CrdR",
     "xG",
     "npxG",
     "xAG",
+    "npxG+xAG",
     "PrgC",
     "PrgP",
     "PrgR",
+    "Sh",
+    "SoT",
     "KP",
     "PPA",
     "Tkl",
     "TklW",
     "Int",
     "Tkl+Int",
+    "Blocks",
     "Clr",
     "Err",
     "Touches",
     "Carries",
     "Mis",
     "Dis",
+    "Rec",
     "Recov",
+    "Won",
+    "Lost",
+]
+
+PER90_FEATURES = [
+    "Gls",
+    "Ast",
+    "G+A",
+    "G-PK",
+    "xG",
+    "npxG",
+    "xAG",
+    "npxG+xAG",
+    "PrgC",
+    "PrgP",
+    "PrgR",
     "Sh",
     "SoT",
+    "KP",
+    "PPA",
+    "Tkl",
+    "TklW",
+    "Int",
+    "Tkl+Int",
+    "Blocks",
+    "Clr",
+    "Touches",
+    "Carries",
+    "Mis",
+    "Dis",
+    "Rec",
+    "Recov",
+]
+
+SCOUTING_FEATURES = [
+    "Gls_per90",
+    "Ast_per90",
+    "xG_per90",
+    "xAG_per90",
+    "PrgC_per90",
+    "PrgP_per90",
+    "PrgR_per90",
+    "Sh_per90",
+    "SoT_per90",
+    "KP_per90",
+    "PPA_per90",
+    "Tkl_per90",
+    "Int_per90",
+    "Blocks_per90",
+    "Touches_per90",
+    "Carries_per90",
 ]
 
 
-@dataclass
-class MatchResult:
-    player_id: Optional[int]
-    method: str
-    score: Optional[int]
+def normalize_text(value: Any) -> str:
+    text = "" if value is None else str(value)
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return " ".join(text.split())
 
 
-def normalize_text(value: str) -> str:
-    if value is None:
-        return ""
-    text = str(value).strip().lower()
-    if unidecode is not None:
-        text = unidecode(text)
-    for ch in ["'", "\"", ".", ",", "-", "(", ")", "[", "]"]:
-        text = text.replace(ch, " ")
-    text = " ".join(text.split())
-    return text
+def token_sort_ratio(left: str, right: str) -> int:
+    left_sorted = " ".join(sorted(left.split()))
+    right_sorted = " ".join(sorted(right.split()))
+    return round(SequenceMatcher(None, left_sorted, right_sorted).ratio() * 100)
 
 
-def parse_age(value: object) -> Optional[float]:
-    if value is None:
-        return None
-    text = str(value).strip()
+def to_float(value: Any) -> Optional[float]:
+    text = "" if value is None else str(value).strip()
     if not text:
         return None
-    if "-" in text:
-        text = text.split("-")[0]
+    text = text.replace(",", "").replace("%", "")
     try:
         return float(text)
     except ValueError:
         return None
 
 
-def parse_birth_year(value: object) -> Optional[int]:
-    if value is None:
+def to_int(value: Any) -> Optional[int]:
+    number = to_float(value)
+    if number is None or math.isnan(number):
         return None
-    text = str(value).strip()
-    if not text:
-        return None
+    return int(number)
+
+
+def parse_age(value: Any) -> Optional[float]:
+    text = "" if value is None else str(value).strip()
     if "-" in text:
-        text = text.split("-")[0]
-    try:
-        return int(float(text))
-    except ValueError:
-        return None
+        text = text.split("-", 1)[0]
+    return to_float(text)
 
 
-def clean_numeric_series(series: pd.Series) -> pd.Series:
-    return (
-        series.astype(str)
-        .str.replace(",", "", regex=False)
-        .str.replace("%", "", regex=False)
-        .replace({"nan": None, "": None})
-        .apply(lambda x: None if x is None else x)
-        .pipe(pd.to_numeric, errors="coerce")
-    )
+def parse_birth_year(value: Any) -> Optional[int]:
+    text = "" if value is None else str(value).strip()
+    if "-" in text:
+        text = text.split("-", 1)[0]
+    return to_int(text)
 
 
-def to_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
-    numeric_cols = [c for c in df.columns if c not in NON_NUMERIC_COLS]
-    for col in numeric_cols:
-        df[col] = clean_numeric_series(df[col])
-    return df
+def position_group(position: str) -> str:
+    first = (position or "").split(",", 1)[0].strip().upper()
+    if first == "GK":
+        return "GK"
+    if first == "DF":
+        return "DF"
+    if first == "MF":
+        return "MF"
+    if first == "FW":
+        return "FW"
+    return "UNK"
 
 
-def add_per90(df: pd.DataFrame, per90_cols: Iterable[str]) -> pd.DataFrame:
-    if "90s" not in df.columns:
-        return df
-    minutes = df["90s"].replace({0: pd.NA})
-    for col in per90_cols:
-        if col in df.columns:
-            df[f"{col}_per90"] = df[col] / minutes
-    return df
+def read_csv(path: Path) -> List[Dict[str, str]]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        return list(csv.DictReader(handle))
 
 
-def load_fbref() -> pd.DataFrame:
-    df = pd.read_csv(FBREF_FILE, low_memory=False)
-    df["Age"] = df["Age"].apply(parse_age)
-    df["Birth_Year"] = df["Born"].apply(parse_birth_year)
-    df = to_numeric_columns(df)
-    df = add_per90(df, PER90_COLS)
-    df["player_name_norm"] = df["Player"].apply(normalize_text)
-    df["squad_norm"] = df["Squad"].apply(normalize_text)
-    return df
+def write_csv(path: Path, rows: List[Dict[str, Any]], fieldnames: List[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
 
 
-def load_tm_players() -> pd.DataFrame:
-    df = pd.read_csv(TM_PLAYERS_FILE)
-    df["birth_year"] = pd.to_datetime(df["date_of_birth"], errors="coerce").dt.year
-    df["player_name_norm"] = df["name"].apply(normalize_text)
-    df["club_norm"] = df["current_club_name"].apply(normalize_text)
-    return df
+def load_tm_players() -> Tuple[Dict[int, Dict[str, Any]], Dict[Tuple[str, int], List[int]], Dict[int, List[int]]]:
+    players_by_id: Dict[int, Dict[str, Any]] = {}
+    exact_index: Dict[Tuple[str, int], List[int]] = defaultdict(list)
+    year_index: Dict[int, List[int]] = defaultdict(list)
 
-
-def load_tm_valuations() -> pd.DataFrame:
-    df = pd.read_csv(TM_VALUATIONS_FILE)
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    season_mask = (df["date"] >= SEASON_START) & (df["date"] <= SEASON_END)
-    df_season = df.loc[season_mask].copy()
-    df_season = (
-        df_season.sort_values("date")
-        .groupby("player_id", as_index=False)
-        .tail(1)
-    )
-    df_season = df_season[["player_id", "market_value_in_eur", "date"]]
-    df_season = df_season.rename(
-        columns={"market_value_in_eur": "market_value_season_eur"}
-    )
-    return df_season
-
-
-def build_tm_index(tm_players: pd.DataFrame) -> Dict[Tuple[str, int], List[int]]:
-    index: Dict[Tuple[str, int], List[int]] = {}
-    for idx, row in tm_players.iterrows():
-        name = row.get("player_name_norm", "")
-        year = row.get("birth_year")
-        if not name or pd.isna(year):
+    for row in read_csv(TM_PLAYERS_FILE):
+        player_id = to_int(row.get("player_id"))
+        if player_id is None:
             continue
-        key = (name, int(year))
-        index.setdefault(key, []).append(idx)
-    return index
+
+        birth_year = parse_birth_year(str(row.get("date_of_birth", ""))[:4])
+        clean_row: Dict[str, Any] = {
+            **row,
+            "player_id": player_id,
+            "birth_year": birth_year,
+            "player_name_norm": normalize_text(row.get("name")),
+            "club_norm": normalize_text(row.get("current_club_name")),
+            "market_value_in_eur": to_int(row.get("market_value_in_eur")),
+            "highest_market_value_in_eur": to_int(row.get("highest_market_value_in_eur")),
+            "height_in_cm": to_float(row.get("height_in_cm")),
+        }
+        players_by_id[player_id] = clean_row
+
+        if birth_year is not None and clean_row["player_name_norm"]:
+            exact_index[(clean_row["player_name_norm"], birth_year)].append(player_id)
+            year_index[birth_year].append(player_id)
+
+    return players_by_id, exact_index, year_index
 
 
-def pick_best_by_club(tm_players: pd.DataFrame, indices: List[int], squad_norm: str) -> int:
-    if not squad_norm:
-        return indices[0]
-    club_matches = [i for i in indices if tm_players.at[i, "club_norm"] == squad_norm]
-    if len(club_matches) == 1:
-        return club_matches[0]
-    if club_matches:
-        indices = club_matches
-    return tm_players.loc[indices].sort_values(
-        "highest_market_value_in_eur", ascending=False
-    ).index[0]
+def load_latest_season_valuations() -> Dict[int, Dict[str, Any]]:
+    latest: Dict[int, Dict[str, Any]] = {}
+    for row in read_csv(TM_VALUATIONS_FILE):
+        date = row.get("date", "")
+        if date < SEASON_START or date > SEASON_END:
+            continue
+
+        player_id = to_int(row.get("player_id"))
+        value = to_int(row.get("market_value_in_eur"))
+        if player_id is None or value is None:
+            continue
+
+        if player_id not in latest or date > latest[player_id]["valuation_date"]:
+            latest[player_id] = {
+                "market_value_eur": value,
+                "valuation_date": date,
+            }
+    return latest
 
 
-def fuzzy_match(
-    name_norm: str,
+def choose_best_exact_match(player_ids: List[int], players_by_id: Dict[int, Dict[str, Any]], squad_norm: str) -> int:
+    club_matches = [
+        player_id
+        for player_id in player_ids
+        if squad_norm and players_by_id[player_id].get("club_norm") == squad_norm
+    ]
+    candidates = club_matches or player_ids
+    return max(
+        candidates,
+        key=lambda player_id: players_by_id[player_id].get("highest_market_value_in_eur") or 0,
+    )
+
+
+def find_match(
+    fbref_name_norm: str,
     birth_year: Optional[int],
-    tm_players: pd.DataFrame,
     squad_norm: str,
-) -> MatchResult:
-    if fuzz is None or not name_norm or birth_year is None:
-        return MatchResult(None, "none", None)
+    players_by_id: Dict[int, Dict[str, Any]],
+    exact_index: Dict[Tuple[str, int], List[int]],
+    year_index: Dict[int, List[int]],
+) -> Tuple[Optional[int], str, Optional[int]]:
+    if not fbref_name_norm or birth_year is None:
+        return None, "none", None
 
-    candidates = tm_players[tm_players["birth_year"] == birth_year]
-    if candidates.empty:
-        return MatchResult(None, "none", None)
+    exact_candidates = exact_index.get((fbref_name_norm, birth_year), [])
+    if exact_candidates:
+        player_id = choose_best_exact_match(exact_candidates, players_by_id, squad_norm)
+        return player_id, "exact_name_birth_year", 100
 
+    best_id: Optional[int] = None
     best_score = -1
-    best_idx = None
-    for idx, row in candidates.iterrows():
-        score = fuzz.token_sort_ratio(name_norm, row["player_name_norm"])
-        if squad_norm and row["club_norm"] == squad_norm:
+    for player_id in year_index.get(birth_year, []):
+        candidate = players_by_id[player_id]
+        score = token_sort_ratio(fbref_name_norm, candidate.get("player_name_norm", ""))
+        if squad_norm and candidate.get("club_norm") == squad_norm:
             score += 3
         if score > best_score:
+            best_id = player_id
             best_score = score
-            best_idx = idx
 
-    if best_score >= 90 and best_idx is not None:
-        return MatchResult(int(tm_players.at[best_idx, "player_id"]), "fuzzy", best_score)
+    if best_id is not None and best_score >= FUZZY_THRESHOLD:
+        return best_id, "fuzzy_name_birth_year", min(best_score, 100)
 
-    return MatchResult(None, "none", best_score if best_score >= 0 else None)
+    return None, "none", best_score if best_score >= 0 else None
 
 
-def match_players(fbref: pd.DataFrame, tm_players: pd.DataFrame) -> pd.DataFrame:
-    tm_index = build_tm_index(tm_players)
+def clean_fbref_row(row: Dict[str, str]) -> Dict[str, Any]:
+    cleaned: Dict[str, Any] = {
+        "fbref_player": row.get("Player", ""),
+        "player_name": row.get("Player", ""),
+        "age": parse_age(row.get("Age")),
+        "birth_year": parse_birth_year(row.get("Born")),
+        "nation": row.get("Nation", ""),
+        "position": row.get("Pos", ""),
+        "position_group": position_group(row.get("Pos", "")),
+        "squad": row.get("Squad", ""),
+        "competition": row.get("Comp", ""),
+        "player_name_norm": normalize_text(row.get("Player")),
+        "squad_norm": normalize_text(row.get("Squad")),
+    }
 
-    matched_ids: List[Optional[int]] = []
-    matched_method: List[str] = []
-    matched_score: List[Optional[int]] = []
+    for feature in BASE_FEATURES:
+        cleaned[feature] = to_float(row.get(feature))
+    return cleaned
 
-    for _, row in fbref.iterrows():
-        name_norm = row.get("player_name_norm", "")
-        birth_year = row.get("Birth_Year")
-        squad_norm = row.get("squad_norm", "")
 
-        player_id = None
-        method = "none"
-        score = None
+def add_tm_fields(
+    row: Dict[str, Any],
+    tm_player: Dict[str, Any],
+    valuation: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    market_value = None
+    valuation_date = ""
+    if valuation:
+        market_value = valuation.get("market_value_eur")
+        valuation_date = valuation.get("valuation_date", "")
+    if market_value is None:
+        market_value = tm_player.get("market_value_in_eur")
 
-        if name_norm and pd.notna(birth_year):
-            key = (name_norm, int(birth_year))
-            indices = tm_index.get(key, [])
-            if indices:
-                best_idx = pick_best_by_club(tm_players, indices, squad_norm)
-                player_id = int(tm_players.at[best_idx, "player_id"])
-                method = "exact"
+    row["player_id"] = tm_player.get("player_id")
+    row["player_name"] = tm_player.get("name") or row.get("fbref_player")
+    row["foot"] = tm_player.get("foot", "")
+    row["height_in_cm"] = tm_player.get("height_in_cm")
+    row["market_value_eur"] = market_value
+    row["highest_market_value_in_eur"] = tm_player.get("highest_market_value_in_eur")
+    row["valuation_date"] = valuation_date
+    return row
+
+
+def add_per90_features(row: Dict[str, Any]) -> None:
+    nineties = row.get("90s")
+    if not nineties:
+        for feature in PER90_FEATURES:
+            row[f"{feature}_per90"] = None
+        return
+
+    for feature in PER90_FEATURES:
+        value = row.get(feature)
+        row[f"{feature}_per90"] = None if value is None else value / nineties
+
+
+def aggregate_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    grouped: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[int(row["player_id"])].append(row)
+
+    aggregated: List[Dict[str, Any]] = []
+    for _, player_rows in grouped.items():
+        primary = max(player_rows, key=lambda item: item.get("Min") or 0)
+        output = {key: primary.get(key) for key in IDENTITY_COLUMNS}
+        output["squad"] = " / ".join(dict.fromkeys(row.get("squad", "") for row in player_rows if row.get("squad")))
+        output["competition"] = " / ".join(dict.fromkeys(row.get("competition", "") for row in player_rows if row.get("competition")))
+
+        for feature in BASE_FEATURES:
+            values = [row.get(feature) for row in player_rows if row.get(feature) is not None]
+            output[feature] = sum(values) if values else None
+
+        add_per90_features(output)
+        aggregated.append(output)
+
+    return sorted(aggregated, key=lambda item: item.get("player_name", ""))
+
+
+def build_datasets() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Counter]:
+    players_by_id, exact_index, year_index = load_tm_players()
+    latest_valuations = load_latest_season_valuations()
+
+    matched_rows: List[Dict[str, Any]] = []
+    unmatched_rows: List[Dict[str, Any]] = []
+    stats: Counter = Counter()
+
+    for raw_row in read_csv(FBREF_FILE):
+        row = clean_fbref_row(raw_row)
+        player_id, method, score = find_match(
+            row["player_name_norm"],
+            row["birth_year"],
+            row["squad_norm"],
+            players_by_id,
+            exact_index,
+            year_index,
+        )
+        row["tm_match_method"] = method
+        row["tm_match_score"] = score
+
         if player_id is None:
-            result = fuzzy_match(name_norm, birth_year, tm_players, squad_norm)
-            player_id, method, score = result.player_id, result.method, result.score
+            unmatched_rows.append(row)
+            stats["unmatched"] += 1
+            continue
 
-        matched_ids.append(player_id)
-        matched_method.append(method)
-        matched_score.append(score)
+        tm_player = players_by_id[player_id]
+        add_tm_fields(row, tm_player, latest_valuations.get(player_id))
+        matched_rows.append(row)
+        stats[method] += 1
 
-    fbref = fbref.copy()
-    fbref["tm_player_id"] = matched_ids
-    fbref["tm_match_method"] = matched_method
-    fbref["tm_match_score"] = matched_score
-    return fbref
+    return aggregate_rows(matched_rows), unmatched_rows, stats
+
+
+def model_ready_filter(row: Dict[str, Any]) -> bool:
+    if row.get("market_value_eur") is None:
+        return False
+    if row.get("Min") is None or row["Min"] < MIN_MINUTES_FOR_MODEL:
+        return False
+    if row.get("position_group") in {"GK", "UNK"}:
+        return False
+    return True
+
+
+def scouting_filter(row: Dict[str, Any]) -> bool:
+    if row.get("market_value_eur") is None:
+        return False
+    if row.get("Min") is None or row["Min"] < MIN_MINUTES_FOR_MODEL:
+        return False
+    return row.get("position_group") != "UNK"
 
 
 def main() -> None:
-    fbref = load_fbref()
-    tm_players = load_tm_players()
-    tm_vals = load_tm_valuations()
+    merged_rows, unmatched_rows, stats = build_datasets()
+    model_rows = [row for row in merged_rows if model_ready_filter(row)]
+    scouting_rows = [row for row in merged_rows if scouting_filter(row)]
 
-    fbref = match_players(fbref, tm_players)
+    feature_columns = BASE_FEATURES + [f"{feature}_per90" for feature in PER90_FEATURES]
+    merged_columns = IDENTITY_COLUMNS + feature_columns
+    scouting_columns = [
+        "player_id",
+        "player_name",
+        "age",
+        "birth_year",
+        "nation",
+        "position",
+        "position_group",
+        "squad",
+        "competition",
+        "market_value_eur",
+        "Min",
+        "90s",
+    ] + SCOUTING_FEATURES
 
-    merged = fbref.merge(
-        tm_players,
-        left_on="tm_player_id",
-        right_on="player_id",
-        how="left",
-        suffixes=("_fbref", "_tm"),
+    write_csv(PROCESSED_DIR / "players_merged_2024_2025.csv", model_rows, merged_columns)
+    write_csv(PROCESSED_DIR / "scouting_features_2024_2025.csv", scouting_rows, scouting_columns)
+    write_csv(
+        PROCESSED_DIR / "unmatched_players_2024_2025.csv",
+        unmatched_rows,
+        [
+            "fbref_player",
+            "age",
+            "birth_year",
+            "nation",
+            "position",
+            "squad",
+            "competition",
+            "tm_match_method",
+            "tm_match_score",
+        ],
     )
-    merged = merged.merge(tm_vals, on="player_id", how="left")
-    merged["market_value_eur_final"] = merged["market_value_season_eur"].fillna(
-        merged["market_value_in_eur"]
-    )
 
-    out_file = DATA_DIR / "players_2024_2025_joined.csv"
-    unmatched_file = DATA_DIR / "players_2024_2025_unmatched.csv"
-
-    merged.to_csv(out_file, index=False)
-    merged.loc[merged["tm_player_id"].isna()].to_csv(unmatched_file, index=False)
-
-    print(f"Saved joined dataset to: {out_file}")
-    print(f"Saved unmatched rows to: {unmatched_file}")
+    print("Prepared 2024/25 datasets")
+    print(f"Matched player rows before aggregation: {sum(stats.values()) - stats['unmatched']}")
+    print(f"Unmatched FBref rows: {stats['unmatched']}")
+    print(f"Exact matches: {stats['exact_name_birth_year']}")
+    print(f"Fuzzy matches: {stats['fuzzy_name_birth_year']}")
+    print(f"Valuation training rows: {len(model_rows)}")
+    print(f"Scouting rows: {len(scouting_rows)}")
+    print(f"Saved: {PROCESSED_DIR / 'players_merged_2024_2025.csv'}")
+    print(f"Saved: {PROCESSED_DIR / 'scouting_features_2024_2025.csv'}")
+    print(f"Saved: {PROCESSED_DIR / 'unmatched_players_2024_2025.csv'}")
 
 
 if __name__ == "__main__":

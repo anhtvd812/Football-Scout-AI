@@ -9,7 +9,7 @@ Football-Scout-AI la he thong khoa hoc du lieu va machine learning de danh gia g
 Tap du lieu chinh cho hien tai: FBref 2024-2025 ket hop Transfermarkt (players + valuations).
 
 ## Toi da lam gi
-Da hoan thanh 2 buoc xu ly du lieu de tao tap train dau vao:
+Da hoan thanh buoc xu ly du lieu de tao tap train dau vao cho team AI:
 
 1) Lam sach va chuan hoa du lieu mua 2024-2025
 - Chuyen doi cac cot so, loai ky tu % va dau phay.
@@ -21,24 +21,25 @@ Da hoan thanh 2 buoc xu ly du lieu de tao tap train dau vao:
 - Co fuzzy match khi khop chinh xac khong thanh cong.
 - Lay market value theo mua 2024-2025, neu thieu thi fallback ve market value hien tai.
 
-Script thuc hien hai buoc nay:
+Script thuc hien:
 - [scripts/prepare_2024_2025_dataset.py](scripts/prepare_2024_2025_dataset.py)
 
 Ket qua sinh ra:
-- [data/players_2024_2025_joined.csv](data/players_2024_2025_joined.csv)
-- [data/players_2024_2025_unmatched.csv](data/players_2024_2025_unmatched.csv)
+- `data/processed/players_merged_2024_2025.csv`: file train model dinh gia.
+- `data/processed/scouting_features_2024_2025.csv`: file lam KNN/Cosine Similarity.
+- `data/processed/unmatched_players_2024_2025.csv`: cac dong chua match duoc de QA thu cong.
+
+Tai lieu ban giao cho Core AI:
+- [docs/FEATURES.md](docs/FEATURES.md)
 
 ## Huong dan chay
 
-### 1) Cai thu vien (neu chua co)
-```bash
-pip install pandas thefuzz unidecode
-```
-
-### 2) Chay xu ly du lieu
+### Chay xu ly du lieu
 ```bash
 python scripts/prepare_2024_2025_dataset.py
 ```
+
+Script nay chi dung thu vien chuan cua Python, khong can cai them package.
 
 ## Data dau vao su dung
 - Link tai data: https://drive.google.com/drive/folders/1YGc01tisXaiBsYDRdMXkh4BSaamep4HB?usp=drive_link
