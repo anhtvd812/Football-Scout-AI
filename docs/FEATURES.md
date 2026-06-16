@@ -4,8 +4,27 @@ Tài liệu này dành cho Kiệt hoặc người phụ trách phần model. M�
 
 ## Các file cần dùng
 
+- `data/processed/player_seasons_merged.csv`
+  - File chính nên ưu tiên cho mô hình định giá multi-season.
+  - Mỗi dòng là một cặp `cầu thủ - mùa giải`.
+  - Hiện gồm 3 mùa: `2021_2022`, `2022_2023`, `2024_2025`.
+  - Target `market_value_eur` đã lấy theo valuation gần cuối mùa tương ứng, không dùng giá trị tương lai quá xa.
+  - File này đã lọc sẵn:
+    - Chỉ lấy cầu thủ không phải thủ môn.
+    - `Min >= 450`.
+    - Có `market_value_eur`.
+
+- `data/processed/scouting_features_multi_season.csv`
+  - File chính nên ưu tiên cho bài toán tìm cầu thủ tương đồng khi muốn dùng nhiều mùa.
+  - Có thể lọc theo `season == "2024_2025"` nếu chỉ muốn tìm theo phong độ mới nhất.
+  - Có thể dùng toàn bộ nhiều mùa nếu muốn xây profile ổn định hơn theo thời gian.
+
+- `data/processed/unmatched_players_multi_season.csv`
+  - Danh sách các dòng chưa match hoặc thiếu valuation theo mùa.
+  - Dùng để QA nếu thiếu cầu thủ quan trọng trong demo.
+
 - `data/processed/players_merged_2024_2025.csv`
-  - File chính để train mô hình định giá cầu thủ.
+  - File một mùa 2024/25, dùng làm fallback hoặc so sánh baseline.
   - Mỗi dòng là một cầu thủ đã match được giữa dữ liệu FBref-like và Transfermarkt.
   - Các cầu thủ chuyển CLB trong mùa đã được gộp thành một dòng.
   - File này đã lọc sẵn:
@@ -14,7 +33,7 @@ Tài liệu này dành cho Kiệt hoặc người phụ trách phần model. M�
     - Có `market_value_eur`.
 
 - `data/processed/scouting_features_2024_2025.csv`
-  - File chính để làm bài toán tìm cầu thủ tương đồng / hidden gem scouting.
+  - File scouting một mùa 2024/25.
   - Có thể dùng trực tiếp với `StandardScaler` + `cosine_similarity` hoặc KNN.
   - File này đã lọc sẵn:
     - `Min >= 450`.
@@ -46,6 +65,43 @@ predicted_value_eur = np.expm1(prediction)
 ```
 
 Lý do: giá cầu thủ bị lệch rất mạnh. Một số cầu thủ chỉ vài trăm nghìn euro, trong khi nhóm siêu sao có thể hơn 100 triệu euro. Nếu train trực tiếp bằng giá gốc, model dễ bị kéo lệch bởi các cầu thủ quá đắt.
+
+## Lưu ý về dữ liệu nhiều mùa
+
+Với file `player_seasons_merged.csv`, các mùa không có schema giống nhau hoàn toàn:
+
+- `2021_2022` và `2022_2023` đến từ Kaggle/FBref per-90, có nhiều chỉ số passing/defense/possession nhưng không có `xG`, `npxG`, `xAG`.
+- `2024_2025` có schema giàu hơn, gồm cả `xG`, `npxG`, `xAG`.
+- Vì vậy khi train baseline multi-season, nên bắt đầu bằng các feature có mặt ở cả 3 mùa.
+
+Feature nên ưu tiên cho baseline multi-season:
+
+```python
+multi_season_features = [
+    "age",
+    "height_in_cm",
+    "Min",
+    "90s",
+    "Gls_per90",
+    "Ast_per90",
+    "Sh_per90",
+    "SoT_per90",
+    "PrgC_per90",
+    "PrgP_per90",
+    "PrgR_per90",
+    "KP_per90",
+    "PPA_per90",
+    "Tkl_per90",
+    "Int_per90",
+    "Blocks_per90",
+    "Clr_per90",
+    "Touches_per90",
+    "Carries_per90",
+    "Recov_per90",
+]
+```
+
+`xG_per90`, `xAG_per90`, `npxG_per90` có thể thêm ở model thứ hai, nhưng phải xử lý missing value cẩn thận.
 
 ## Feature đề xuất cho mô hình định giá
 

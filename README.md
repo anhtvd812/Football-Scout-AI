@@ -23,8 +23,12 @@ Da hoan thanh buoc xu ly du lieu de tao tap train dau vao cho team AI:
 
 Script thuc hien:
 - [scripts/prepare_2024_2025_dataset.py](scripts/prepare_2024_2025_dataset.py)
+- [scripts/prepare_multi_season_dataset.py](scripts/prepare_multi_season_dataset.py)
 
 Ket qua sinh ra:
+- `data/processed/player_seasons_merged.csv`: file train model dinh gia multi-season, nen uu tien dung.
+- `data/processed/scouting_features_multi_season.csv`: file scouting multi-season.
+- `data/processed/unmatched_players_multi_season.csv`: cac dong chua match hoac thieu valuation theo mua.
 - `data/processed/players_merged_2024_2025.csv`: file train model dinh gia.
 - `data/processed/scouting_features_2024_2025.csv`: file lam KNN/Cosine Similarity.
 - `data/processed/unmatched_players_2024_2025.csv`: cac dong chua match duoc de QA thu cong.
@@ -39,7 +43,12 @@ Tai lieu ban giao cho Core AI:
 python scripts/prepare_2024_2025_dataset.py
 ```
 
-Script nay chi dung thu vien chuan cua Python, khong can cai them package.
+### Chay xu ly du lieu nhieu mua
+```bash
+python scripts/prepare_multi_season_dataset.py
+```
+
+Hai script nay chi dung thu vien chuan cua Python, khong can cai them package.
 
 ## Data dau vao su dung
 - Link tai data: https://drive.google.com/drive/folders/1YGc01tisXaiBsYDRdMXkh4BSaamep4HB?usp=drive_link
