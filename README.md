@@ -6,8 +6,8 @@ Hệ thống machine learning để **định giá cầu thủ** (regression) v�
 
 | Pipeline | Mục tiêu | Output chính |
 |----------|----------|--------------|
-| Định giá | Dự đoán `market_value_eur` từ hiệu suất + metadata | `predict_player_value()` |
-| Scouting | Tìm cầu thủ tương đồng trong cùng nhóm vị trí | `find_similar_players()` |
+| Định giá | Ước `market_value_eur` cuối mùa từ stats + metadata (cùng mùa, không forecast mùa sau) | `predict_player_value()` |
+| Scouting | Tìm cầu thủ tương đồng trong cùng nhóm vị trí và **cùng mùa** | `find_similar_players()` |
 
 Chi tiết dataset và spec model cho team AI: [docs/FEATURES.md](docs/FEATURES.md).
 
@@ -42,8 +42,7 @@ Tải từ [Google Drive](https://drive.google.com/drive/folders/1YGc01tisXaiBsY
 | `players.csv` | Transfermarkt — thông tin cầu thủ |
 | `player_valuations.csv` | Transfermarkt — lịch sử giá |
 | `players_data-2024_2025.csv` | FBref mùa 2024/25 |
-| `players_data-2021_2022.csv` | Kaggle / vivovinco (multi-season) |
-| `players_data-2022_2023.csv` | Kaggle / vivovinco (multi-season) |
+| `player_standard_stats.csv` (+ shooting, passing, defense, possession, misc) | FBref warehouse 2018/19–2023/24 |
 
 `players_data-2025_2026.csv` chưa dùng (schema khác mùa 2024/25).
 
@@ -55,16 +54,19 @@ Chạy từ thư mục gốc project:
 
 ```bash
 python scripts/prepare_multi_season_dataset.py
-python scripts/prepare_2024_2025_dataset.py
 ```
 
 Ghi ra `data/processed/`:
 
-- `player_seasons_merged.csv` — train định giá multi-season (ưu tiên)
+- `player_seasons_merged.csv` — train định giá multi-season (~12k dòng, 7 mùa)
 - `scouting_features_multi_season.csv` — similarity multi-season
-- `players_merged_2024_2025.csv` — định giá một mùa
-- `scouting_features_2024_2025.csv` — scouting một mùa
-- `unmatched_players_*.csv` — dòng chưa match, dùng QA thủ công
+- `unmatched_players_multi_season.csv` — dòng chưa match, dùng QA thủ công
+
+Raw data cần có:
+
+- `players.csv`, `player_valuations.csv` — Transfermarkt
+- `players_data-2024_2025.csv` — FBref mùa 2024/25
+- `player_standard_stats.csv`, `player_shooting.csv`, `player_passing.csv`, `player_defense.csv`, `player_possession.csv`, `player_misc.csv` — FBref warehouse 2018/19–2023/24
 
 ### 2. Train model
 
@@ -76,6 +78,7 @@ Lưu tại:
 
 - `models/valuation_model.joblib`
 - `models/scouting_scaler.joblib`
+- `models/valuation_metrics.json` — metric hold-out (R², MAE, RMSE, MAPE)
 
 ### 3. Test CLI (tùy chọn)
 
@@ -98,9 +101,9 @@ Giao diện web gọi cùng logic inference với API Python bên dưới.
 | Endpoint | Mô tả |
 |----------|-------|
 | `GET /health` | Kiểm tra server |
-| `GET /api/players?q=` | Gợi ý tên cầu thủ |
-| `GET /api/predict?player_name=` | Định giá |
-| `GET /api/similar?player_name=&max_price=&max_age=&top_k=` | Cầu thủ tương đồng |
+| `GET /api/players?q=` | Gợi ý tên (mùa mặc định `2024_2025`) |
+| `GET /api/predict?player_name=&season=` | Định giá theo stats mùa chọn |
+| `GET /api/similar?player_name=&max_price=&max_age=&top_k=&season=` | Cầu thủ tương đồng trong cùng mùa |
 
 ## Dùng trong Python
 
@@ -112,7 +115,7 @@ sys.path.insert(0, str(Path("src").resolve()))
 
 from football_scout import predict_player_value, find_similar_players
 
-predict_player_value("Xavi Simons")
+predict_player_value("Xavi Simons")  # mặc định season="2024_2025"
 find_similar_players("Kevin De Bruyne", max_price=30_000_000, max_age=25, top_k=5)
 ```
 
@@ -120,7 +123,10 @@ Model load từ `models/`; nếu chưa có sẽ tự train lần gọi đầu.
 
 ## Ghi chú
 
-- Model định giá multi-season dùng feature có ở cả 3 mùa 2021/22, 2022/23, 2024/25 (mùa cũ không có `xG`).
-- Scouting mặc định mùa `2024_2025`; chỉ so sánh trong cùng `position_group`.
-- Thủ môn (GK) bị loại khỏi output định giá và scouting.
-- Chỉnh ngưỡng fuzzy match trong `scripts/prepare_2024_2025_dataset.py` (`FUZZY_THRESHOLD`).
+- Dataset train gồm **7 mùa** Big 5: `2018_2019` … `2024_2025` (~12.164 player-season sau lọc `Min >= 450`, có giá TM).
+- Warehouse FBref (2018/19–2023/24) + file wide `players_data-2024_2025.csv`; mùa `2019_2020` dùng cửa sổ giá rộng hơn vì COVID.
+- Định giá và scouting mặc định **`season=2024_2025`** — so sánh phong độ/giá **cùng mùa**, không phải dự đoán mùa 2025/26.
+- Model định giá: Random Forest trên **22 feature số** (gồm `xG_per90`, `xAG_per90`) + `position_group`, `foot`, `competition`.
+- Scouting: cosine similarity trên **16 feature per-90**, chỉ trong cùng `position_group`.
+- Thủ môn (GK) bị loại khỏi output train và inference.
+- Chỉnh ngưỡng fuzzy match TM: `FUZZY_THRESHOLD` trong `scripts/prepare_2024_2025_dataset.py` (module helper cho `prepare_multi_season_dataset.py`).

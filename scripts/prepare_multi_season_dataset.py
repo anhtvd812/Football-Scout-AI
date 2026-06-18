@@ -13,7 +13,6 @@ from prepare_2024_2025_dataset import (
     PROCESSED_DIR,
     RAW_DIR,
     SCOUTING_FEATURES,
-    SCOUTING_X_FEATURES,
     find_match,
     load_tm_players,
     normalize_competition,
@@ -31,47 +30,76 @@ TM_VALUATIONS_FILE = RAW_DIR / "player_valuations.csv"
 SEASON_2024_2025_EXTENDED_START = "2024-07-01"
 SEASON_2024_2025_EXTENDED_END = "2025-06-30"
 
+WAREHOUSE_FILES = {
+    "standard": RAW_DIR / "player_standard_stats.csv",
+    "shooting": RAW_DIR / "player_shooting.csv",
+    "passing": RAW_DIR / "player_passing.csv",
+    "defense": RAW_DIR / "player_defense.csv",
+    "possession": RAW_DIR / "player_possession.csv",
+    "misc": RAW_DIR / "player_misc.csv",
+}
+
 
 @dataclass(frozen=True)
 class SeasonConfig:
     season: str
-    stats_file: Path
-    delimiter: str
-    encoding: str
-    source_is_per90: bool
-    goals_are_total: bool
+    source_kind: str
     valuation_start: str
     valuation_end: str
+    stats_file: Path | None = None
+    warehouse_year: int | None = None
+    delimiter: str = ","
+    encoding: str = "utf-8"
 
 
 SEASONS = [
     SeasonConfig(
+        season="2018_2019",
+        source_kind="warehouse",
+        warehouse_year=2018,
+        valuation_start="2019-05-01",
+        valuation_end="2019-07-31",
+    ),
+    SeasonConfig(
+        season="2019_2020",
+        source_kind="warehouse",
+        warehouse_year=2019,
+        # COVID reduced Transfermarkt updates in mid-2020; use a wider end-of-season window.
+        valuation_start="2019-12-01",
+        valuation_end="2020-12-31",
+    ),
+    SeasonConfig(
+        season="2020_2021",
+        source_kind="warehouse",
+        warehouse_year=2020,
+        valuation_start="2021-05-01",
+        valuation_end="2021-07-31",
+    ),
+    SeasonConfig(
         season="2021_2022",
-        stats_file=RAW_DIR / "players_data-2021_2022.csv",
-        delimiter=";",
-        encoding="latin-1",
-        source_is_per90=True,
-        goals_are_total=False,
+        source_kind="warehouse",
+        warehouse_year=2021,
         valuation_start="2022-05-01",
         valuation_end="2022-07-31",
     ),
     SeasonConfig(
         season="2022_2023",
-        stats_file=RAW_DIR / "players_data-2022_2023.csv",
-        delimiter=";",
-        encoding="latin-1",
-        source_is_per90=True,
-        goals_are_total=True,
+        source_kind="warehouse",
+        warehouse_year=2022,
         valuation_start="2023-05-01",
         valuation_end="2023-07-31",
     ),
     SeasonConfig(
+        season="2023_2024",
+        source_kind="warehouse",
+        warehouse_year=2023,
+        valuation_start="2024-05-01",
+        valuation_end="2024-07-31",
+    ),
+    SeasonConfig(
         season="2024_2025",
+        source_kind="fbref_wide",
         stats_file=RAW_DIR / "players_data-2024_2025.csv",
-        delimiter=",",
-        encoding="utf-8",
-        source_is_per90=False,
-        goals_are_total=True,
         valuation_start="2025-05-01",
         valuation_end="2025-07-31",
     ),
@@ -141,30 +169,6 @@ RAW_TOTAL_TO_PER90 = {
     "Lost": "AerLost_per90",
 }
 
-KAGGLE_PER90_TO_CANONICAL = {
-    "Assists": "Ast_per90",
-    "Shots": "Sh_per90",
-    "SoT": "SoT_per90",
-    "CarProg": "PrgC_per90",
-    "PasProg": "PrgP_per90",
-    "RecProg": "PrgR_per90",
-    "PasAss": "KP_per90",
-    "PPA": "PPA_per90",
-    "Tkl": "Tkl_per90",
-    "TklW": "TklW_per90",
-    "Int": "Int_per90",
-    "Blocks": "Blocks_per90",
-    "Clr": "Clr_per90",
-    "Touches": "Touches_per90",
-    "Carries": "Carries_per90",
-    "CarMis": "Mis_per90",
-    "CarDis": "Dis_per90",
-    "Rec": "Rec_per90",
-    "Recov": "Recov_per90",
-    "AerWon": "AerWon_per90",
-    "AerLost": "AerLost_per90",
-}
-
 IDENTITY_COLUMNS = [
     "player_id",
     "player_name",
@@ -188,7 +192,96 @@ IDENTITY_COLUMNS = [
 ]
 
 
-def read_stats_csv(config: SeasonConfig) -> List[Dict[str, str]]:
+def warehouse_row_key(row: Dict[str, str]) -> Tuple[str, str, str, str]:
+    return (
+        row.get("player", ""),
+        row.get("squad", ""),
+        row.get("comp", ""),
+        str(row.get("season", "")),
+    )
+
+
+def load_warehouse_tables() -> Dict[str, Dict[Tuple[str, str, str, str], Dict[str, str]]]:
+    tables: Dict[str, Dict[Tuple[str, str, str, str], Dict[str, str]]] = {}
+    for name, path in WAREHOUSE_FILES.items():
+        indexed: Dict[Tuple[str, str, str, str], Dict[str, str]] = {}
+        with path.open(newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                indexed[warehouse_row_key(row)] = row
+        tables[name] = indexed
+    return tables
+
+
+def merge_warehouse_row(
+    key: Tuple[str, str, str, str],
+    tables: Dict[str, Dict[Tuple[str, str, str, str], Dict[str, str]]],
+) -> Dict[str, str]:
+    merged = dict(tables["standard"][key])
+    for name in ("shooting", "passing", "defense", "possession", "misc"):
+        merged.update(tables[name].get(key, {}))
+    return merged
+
+
+def warehouse_to_fbref_row(row: Dict[str, str]) -> Dict[str, str]:
+    return {
+        "Player": row.get("player", ""),
+        "Squad": row.get("squad", ""),
+        "Comp": row.get("comp", ""),
+        "Pos": row.get("position", ""),
+        "Age": row.get("age", ""),
+        "Born": row.get("born", ""),
+        "Nation": row.get("nation", ""),
+        "MP": row.get("mp", ""),
+        "Starts": row.get("starts", ""),
+        "Min": row.get("min", ""),
+        "90s": row.get("ninety_mins_played", ""),
+        "Gls": row.get("goals", ""),
+        "Ast": row.get("assists", ""),
+        "xG": row.get("xg", ""),
+        "npxG": row.get("non_penalty_xg", ""),
+        "xAG": row.get("xag", ""),
+        "PrgC": row.get("progressive_carries", ""),
+        "PrgP": row.get("progressive_passes", ""),
+        "PrgR": row.get("progressive_passes_received", ""),
+        "Sh": row.get("shots", ""),
+        "SoT": row.get("shots_on_target", ""),
+        "KP": row.get("key_passes", ""),
+        "PPA": row.get("passes_into_penalty_area", ""),
+        "Tkl": row.get("tackles", ""),
+        "TklW": row.get("tackles_won", ""),
+        "Int": row.get("interceptions", ""),
+        "Blocks": row.get("blocks", ""),
+        "Clr": row.get("clearances", ""),
+        "Touches": row.get("touches", ""),
+        "Carries": row.get("carries", ""),
+        "Mis": row.get("miscontrols", ""),
+        "Dis": row.get("dispossessed", ""),
+        "Rec": row.get("passes_received", ""),
+        "Recov": row.get("ball_recoveries", ""),
+        "Won": row.get("aerials_won", ""),
+        "Lost": row.get("aerials_lost", ""),
+    }
+
+
+def read_warehouse_stats(config: SeasonConfig, tables: Dict[str, Dict[Tuple[str, str, str, str], Dict[str, str]]]) -> List[Dict[str, str]]:
+    if config.warehouse_year is None:
+        return []
+    year = str(config.warehouse_year)
+    standard = tables["standard"]
+    return [
+        warehouse_to_fbref_row(merge_warehouse_row(key, tables))
+        for key, row in standard.items()
+        if str(row.get("season", "")) == year
+    ]
+
+
+def read_stats_csv(config: SeasonConfig, warehouse_tables: Dict[str, Dict[Tuple[str, str, str, str], Dict[str, str]]] | None = None) -> List[Dict[str, str]]:
+    if config.source_kind == "warehouse":
+        if warehouse_tables is None:
+            warehouse_tables = load_warehouse_tables()
+        return read_warehouse_stats(config, warehouse_tables)
+    if config.stats_file is None:
+        return []
     with config.stats_file.open(newline="", encoding=config.encoding) as handle:
         return list(csv.DictReader(handle, delimiter=config.delimiter))
 
@@ -274,14 +367,6 @@ def resolve_season_valuation(
     return None, "none"
 
 
-def finalize_scouting_metrics(row: Dict[str, Any], config: SeasonConfig) -> None:
-    if not config.source_is_per90:
-        return
-    for feature in SCOUTING_X_FEATURES:
-        if row.get(feature) is None:
-            row[feature] = 0.0
-
-
 def base_row(raw: Dict[str, str], config: SeasonConfig) -> Dict[str, Any]:
     player = raw.get("Player", "")
     squad = raw.get("Squad", "")
@@ -297,7 +382,11 @@ def base_row(raw: Dict[str, str], config: SeasonConfig) -> Dict[str, Any]:
         "position_group": position_group(position),
         "squad": squad,
         "competition": normalize_competition(raw.get("Comp", "")),
-        "source_file": config.stats_file.name,
+        "source_file": (
+            config.stats_file.name
+            if config.stats_file is not None
+            else f"warehouse_{config.warehouse_year}"
+        ),
         "player_name_norm": normalize_text(player),
         "squad_norm": normalize_text(squad),
     }
@@ -310,18 +399,6 @@ def base_row(raw: Dict[str, str], config: SeasonConfig) -> Dict[str, Any]:
 
 def normalize_stats_row(raw: Dict[str, str], config: SeasonConfig) -> Dict[str, Any]:
     row = base_row(raw, config)
-
-    if config.source_is_per90:
-        for source, target in KAGGLE_PER90_TO_CANONICAL.items():
-            row[target] = to_float(raw.get(source))
-        goals = to_float(raw.get("Goals"))
-        if config.goals_are_total:
-            nineties = row.get("90s")
-            row["Gls_per90"] = None if goals is None or not nineties else goals / nineties
-        else:
-            row["Gls_per90"] = goals
-        return row
-
     nineties = row.get("90s")
     for source, target in RAW_TOTAL_TO_PER90.items():
         value = to_float(raw.get(source))
@@ -409,12 +486,12 @@ def build_multi_season_rows() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]
     unmatched_rows: List[Dict[str, Any]] = []
     stats: Counter = Counter()
 
+    warehouse_tables = load_warehouse_tables()
     for config in SEASONS:
         season_values = valuations_by_season[config.season]
         extended_values = extended_2024_2025 if config.season == "2024_2025" else None
-        for raw in read_stats_csv(config):
+        for raw in read_stats_csv(config, warehouse_tables):
             row = normalize_stats_row(raw, config)
-            finalize_scouting_metrics(row, config)
             stats[f"{config.season}_raw_rows"] += 1
 
             player_id, method, score = find_match(

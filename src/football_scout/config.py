@@ -16,6 +16,10 @@ DEFAULT_SCOUTING_SEASON = "2024_2025"
 NAME_MATCH_THRESHOLD = 85
 MARKET_STATUS_RATIO = 0.15
 
+VALUATION_TEST_SIZE = 0.2
+VALUATION_RANDOM_STATE = 42
+VALUATION_METRICS_FILE = MODELS_DIR / "valuation_metrics.json"
+
 MULTI_SEASON_NUMERIC_FEATURES = [
     "age",
     "height_in_cm",
@@ -23,6 +27,8 @@ MULTI_SEASON_NUMERIC_FEATURES = [
     "90s",
     "Gls_per90",
     "Ast_per90",
+    "xG_per90",
+    "xAG_per90",
     "Sh_per90",
     "SoT_per90",
     "PrgC_per90",
