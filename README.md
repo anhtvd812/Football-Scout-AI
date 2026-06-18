@@ -6,6 +6,8 @@ Football-Scout-AI la he thong khoa hoc du lieu va machine learning de danh gia g
 - Dinh gia cau thu (Regression): du doan `market_value_eur` tu thong so hieu suat per 90.
 - Scout tuong dong (Similarity): tim cau thu tre, gia thap co phong cach giong sao muc tieu.
 
+Frontend React (`FE/`) cung cap giao dien dashboard, chi tiet cau thu, radar chart va chatbot trinh sat AI.
+
 Tap du lieu chinh cho hien tai: FBref 2024-2025 ket hop Transfermarkt (players + valuations).
 
 ## Toi da lam gi
@@ -49,6 +51,42 @@ python scripts/prepare_multi_season_dataset.py
 ```
 
 Hai script nay chi dung thu vien chuan cua Python, khong can cai them package.
+
+### Chay Frontend (React)
+Yeu cau: Node.js 18+ va npm.
+
+```bash
+cd FE
+npm install
+npm run dev
+```
+
+Mo trinh duyet tai http://localhost:5173
+
+Mac dinh app dung mock data (khong can backend). De ket noi API backend, tao file `FE/.env` tu mau:
+
+```bash
+cp FE/.env.example FE/.env
+```
+
+Noi dung `.env` mau:
+
+```env
+VITE_API_URL=http://localhost:8000/api
+VITE_USE_MOCK=false
+```
+
+Khi `VITE_USE_MOCK=true` hoac khong dat `VITE_API_URL`, frontend tu dong dung du lieu demo.
+
+Build production:
+
+```bash
+cd FE
+npm run build
+npm run preview
+```
+
+Chi tiet API endpoints va tinh nang UI: xem [FE/README.md](FE/README.md).
 
 ## Data dau vao su dung
 - Link tai data: https://drive.google.com/drive/folders/1YGc01tisXaiBsYDRdMXkh4BSaamep4HB?usp=drive_link
