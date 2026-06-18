@@ -1,33 +1,33 @@
 # Football-Scout-AI
 
-Machine learning system for football player **valuation** (regression) and **similarity scouting** (cosine similarity on per-90 stats). Data comes from FBref-style performance tables joined with Transfermarkt market values.
+Hệ thống machine learning để **định giá cầu thủ** (regression) và **tìm cầu thủ tương đồng** (cosine similarity trên chỉ số per-90). Dữ liệu lấy từ bảng thống kê kiểu FBref, join với giá thị trường Transfermarkt.
 
-## Pipelines
+## Hai pipeline chính
 
-| Pipeline | Goal | Main output |
-|----------|------|-------------|
-| Valuation | Predict `market_value_eur` from performance + metadata | `predict_player_value()` |
-| Scouting | Find similar players in the same position group | `find_similar_players()` |
+| Pipeline | Mục tiêu | Output chính |
+|----------|----------|--------------|
+| Định giá | Dự đoán `market_value_eur` từ hiệu suất + metadata | `predict_player_value()` |
+| Scouting | Tìm cầu thủ tương đồng trong cùng nhóm vị trí | `find_similar_players()` |
 
-Processed datasets and model specs for the AI team: [docs/FEATURES.md](docs/FEATURES.md).
+Chi tiết dataset và spec model cho team AI: [docs/FEATURES.md](docs/FEATURES.md).
 
-## Project layout
+## Cấu trúc project
 
 ```
-data/raw/              # Input CSVs (not committed)
-data/processed/        # Merged training / scouting files
-models/                # Trained joblib artifacts (regenerate via train script)
-scripts/               # Data prep, train, demo, web launcher
-src/football_scout/    # ML + FastAPI backend
-web/static/            # Dashboard frontend
+data/raw/              # File CSV đầu vào (không commit)
+data/processed/        # File train / scouting đã merge
+models/                # Model đã train (joblib)
+scripts/               # Xử lý data, train, demo, chạy web
+src/football_scout/    # ML + backend FastAPI
+web/static/            # Giao diện dashboard
 ```
 
-## Prerequisites
+## Yêu cầu
 
 - Python 3.10+
-- Raw data in `data/raw/` (see below)
+- Raw data trong `data/raw/` (xem bên dưới)
 
-## Setup
+## Cài đặt
 
 ```bash
 pip install -r requirements.txt
@@ -35,49 +35,49 @@ pip install -r requirements.txt
 
 ## Raw data
 
-Download from [Google Drive](https://drive.google.com/drive/folders/1YGc01tisXaiBsYDRdMXkh4BSaamep4HB?usp=drive_link) or Kaggle, then place files under `data/raw/`:
+Tải từ [Google Drive](https://drive.google.com/drive/folders/1YGc01tisXaiBsYDRdMXkh4BSaamep4HB?usp=drive_link) hoặc Kaggle, rồi đặt vào `data/raw/`:
 
-| File | Source |
-|------|--------|
-| `players.csv` | Transfermarkt players |
-| `player_valuations.csv` | Transfermarkt valuations |
-| `players_data-2024_2025.csv` | FBref 2024/25 |
+| File | Nguồn |
+|------|-------|
+| `players.csv` | Transfermarkt — thông tin cầu thủ |
+| `player_valuations.csv` | Transfermarkt — lịch sử giá |
+| `players_data-2024_2025.csv` | FBref mùa 2024/25 |
 | `players_data-2021_2022.csv` | Kaggle / vivovinco (multi-season) |
 | `players_data-2022_2023.csv` | Kaggle / vivovinco (multi-season) |
 
-`players_data-2025_2026.csv` is not used yet (schema mismatch).
+`players_data-2025_2026.csv` chưa dùng (schema khác mùa 2024/25).
 
-## Run order
+## Thứ tự chạy
 
-### 1. Prepare datasets
+### 1. Chuẩn bị dataset
 
-From the project root:
+Chạy từ thư mục gốc project:
 
 ```bash
 python scripts/prepare_multi_season_dataset.py
 python scripts/prepare_2024_2025_dataset.py
 ```
 
-Writes to `data/processed/`:
+Ghi ra `data/processed/`:
 
-- `player_seasons_merged.csv` — valuation training (multi-season, preferred)
-- `scouting_features_multi_season.csv` — similarity (multi-season)
-- `players_merged_2024_2025.csv` — single-season valuation
-- `scouting_features_2024_2025.csv` — single-season scouting
-- `unmatched_players_*.csv` — rows for manual QA
+- `player_seasons_merged.csv` — train định giá multi-season (ưu tiên)
+- `scouting_features_multi_season.csv` — similarity multi-season
+- `players_merged_2024_2025.csv` — định giá một mùa
+- `scouting_features_2024_2025.csv` — scouting một mùa
+- `unmatched_players_*.csv` — dòng chưa match, dùng QA thủ công
 
-### 2. Train models
+### 2. Train model
 
 ```bash
 python scripts/train_models.py
 ```
 
-Saves:
+Lưu tại:
 
 - `models/valuation_model.joblib`
 - `models/scouting_scaler.joblib`
 
-### 3. CLI smoke test (optional)
+### 3. Test CLI (tùy chọn)
 
 ```bash
 python scripts/demo_inference.py
@@ -89,20 +89,20 @@ python scripts/demo_inference.py
 python scripts/run_web.py
 ```
 
-Open http://127.0.0.1:8000
+Mở http://127.0.0.1:8000
 
-The UI calls the same inference functions as the Python API below.
+Giao diện web gọi cùng logic inference với API Python bên dưới.
 
 ## API (backend)
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /health` | Health check |
-| `GET /api/players?q=` | Player name autocomplete |
-| `GET /api/predict?player_name=` | Valuation |
-| `GET /api/similar?player_name=&max_price=&max_age=&top_k=` | Similar players |
+| Endpoint | Mô tả |
+|----------|-------|
+| `GET /health` | Kiểm tra server |
+| `GET /api/players?q=` | Gợi ý tên cầu thủ |
+| `GET /api/predict?player_name=` | Định giá |
+| `GET /api/similar?player_name=&max_price=&max_age=&top_k=` | Cầu thủ tương đồng |
 
-## Python usage
+## Dùng trong Python
 
 ```python
 import sys
@@ -116,11 +116,11 @@ predict_player_value("Xavi Simons")
 find_similar_players("Kevin De Bruyne", max_price=30_000_000, max_age=25, top_k=5)
 ```
 
-Models are loaded from `models/`; if missing, they are trained on first call.
+Model load từ `models/`; nếu chưa có sẽ tự train lần gọi đầu.
 
-## Notes
+## Ghi chú
 
-- Multi-season valuation uses features available across 2021/22, 2022/23, and 2024/25 (no `xG` in older seasons).
-- Scouting defaults to season `2024_2025`; comparisons are within the same `position_group`.
-- Goalkeepers are excluded from valuation and scouting outputs.
-- Tune fuzzy matching in `scripts/prepare_2024_2025_dataset.py` (`FUZZY_THRESHOLD`).
+- Model định giá multi-season dùng feature có ở cả 3 mùa 2021/22, 2022/23, 2024/25 (mùa cũ không có `xG`).
+- Scouting mặc định mùa `2024_2025`; chỉ so sánh trong cùng `position_group`.
+- Thủ môn (GK) bị loại khỏi output định giá và scouting.
+- Chỉnh ngưỡng fuzzy match trong `scripts/prepare_2024_2025_dataset.py` (`FUZZY_THRESHOLD`).
