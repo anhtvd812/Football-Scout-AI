@@ -42,8 +42,8 @@ Download from [Google Drive](https://drive.google.com/drive/folders/1YGc01tisXai
 | `players.csv` | Transfermarkt players |
 | `player_valuations.csv` | Transfermarkt valuations |
 | `players_data-2024_2025.csv` | FBref 2024/25 |
-| `2021-2022 Football Player Stats.csv` | Kaggle / vivovinco (multi-season) |
-| `2022-2023 Football Player Stats.csv` | Kaggle / vivovinco (multi-season) |
+| `players_data-2021_2022.csv` | Kaggle / vivovinco (multi-season) |
+| `players_data-2022_2023.csv` | Kaggle / vivovinco (multi-season) |
 
 `players_data-2025_2026.csv` is not used yet (schema mismatch).
 

@@ -47,7 +47,7 @@ class SeasonConfig:
 SEASONS = [
     SeasonConfig(
         season="2021_2022",
-        stats_file=RAW_DIR / "2021-2022 Football Player Stats.csv",
+        stats_file=RAW_DIR / "players_data-2021_2022.csv",
         delimiter=";",
         encoding="latin-1",
         source_is_per90=True,
@@ -57,7 +57,7 @@ SEASONS = [
     ),
     SeasonConfig(
         season="2022_2023",
-        stats_file=RAW_DIR / "2022-2023 Football Player Stats.csv",
+        stats_file=RAW_DIR / "players_data-2022_2023.csv",
         delimiter=";",
         encoding="latin-1",
         source_is_per90=True,
