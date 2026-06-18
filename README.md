@@ -129,4 +129,4 @@ Model load từ `models/`; nếu chưa có sẽ tự train lần gọi đầu.
 - Model định giá: Random Forest trên **22 feature số** (gồm `xG_per90`, `xAG_per90`) + `position_group`, `foot`, `competition`.
 - Scouting: cosine similarity trên **16 feature per-90**, chỉ trong cùng `position_group`.
 - Thủ môn (GK) bị loại khỏi output train và inference.
-- Chỉnh ngưỡng fuzzy match TM: `FUZZY_THRESHOLD` trong `scripts/prepare_2024_2025_dataset.py` (module helper cho `prepare_multi_season_dataset.py`).
+- Chỉnh ngưỡng fuzzy match TM: `FUZZY_THRESHOLD` trong `scripts/prepare_common.py`.

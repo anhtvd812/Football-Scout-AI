@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from prepare_2024_2025_dataset import (
+from prepare_common import (
     FUZZY_THRESHOLD,
     MIN_MINUTES_FOR_MODEL,
     PROCESSED_DIR,
