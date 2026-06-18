@@ -12,11 +12,12 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT_DIR / "data"
+RAW_DIR = DATA_DIR / "raw"
 PROCESSED_DIR = DATA_DIR / "processed"
 
-FBREF_FILE = DATA_DIR / "players_data-2024_2025.csv"
-TM_PLAYERS_FILE = DATA_DIR / "players.csv"
-TM_VALUATIONS_FILE = DATA_DIR / "player_valuations.csv"
+FBREF_FILE = RAW_DIR / "players_data-2024_2025.csv"
+TM_PLAYERS_FILE = RAW_DIR / "players.csv"
+TM_VALUATIONS_FILE = RAW_DIR / "player_valuations.csv"
 
 SEASON_START = "2024-07-01"
 SEASON_END = "2025-06-30"
@@ -132,6 +133,19 @@ SCOUTING_FEATURES = [
     "Touches_per90",
     "Carries_per90",
 ]
+
+SCOUTING_X_FEATURES = ["xG_per90", "xAG_per90"]
+
+
+def normalize_competition(value: Any) -> str:
+    text = "" if value is None else str(value).strip()
+    if not text:
+        return text
+
+    parts = text.split(None, 1)
+    if len(parts) == 2 and len(parts[0]) <= 3 and parts[0].isalpha():
+        return parts[1]
+    return text
 
 
 def normalize_text(value: Any) -> str:
@@ -313,7 +327,7 @@ def clean_fbref_row(row: Dict[str, str]) -> Dict[str, Any]:
         "position": row.get("Pos", ""),
         "position_group": position_group(row.get("Pos", "")),
         "squad": row.get("Squad", ""),
-        "competition": row.get("Comp", ""),
+        "competition": normalize_competition(row.get("Comp", "")),
         "player_name_norm": normalize_text(row.get("Player")),
         "squad_norm": normalize_text(row.get("Squad")),
     }
@@ -368,7 +382,13 @@ def aggregate_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         primary = max(player_rows, key=lambda item: item.get("Min") or 0)
         output = {key: primary.get(key) for key in IDENTITY_COLUMNS}
         output["squad"] = " / ".join(dict.fromkeys(row.get("squad", "") for row in player_rows if row.get("squad")))
-        output["competition"] = " / ".join(dict.fromkeys(row.get("competition", "") for row in player_rows if row.get("competition")))
+        output["competition"] = " / ".join(
+            dict.fromkeys(
+                normalize_competition(row.get("competition", ""))
+                for row in player_rows
+                if row.get("competition")
+            )
+        )
 
         for feature in BASE_FEATURES:
             values = [row.get(feature) for row in player_rows if row.get(feature) is not None]
@@ -429,7 +449,7 @@ def scouting_filter(row: Dict[str, Any]) -> bool:
         return False
     if row.get("Min") is None or row["Min"] < MIN_MINUTES_FOR_MODEL:
         return False
-    return row.get("position_group") != "UNK"
+    return row.get("position_group") not in {"UNK", "GK"}
 
 
 def main() -> None:

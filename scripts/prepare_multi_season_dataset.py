@@ -8,13 +8,15 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from prepare_2024_2025_dataset import (
-    DATA_DIR,
     FUZZY_THRESHOLD,
     MIN_MINUTES_FOR_MODEL,
     PROCESSED_DIR,
+    RAW_DIR,
     SCOUTING_FEATURES,
+    SCOUTING_X_FEATURES,
     find_match,
     load_tm_players,
+    normalize_competition,
     normalize_text,
     parse_age,
     parse_birth_year,
@@ -25,7 +27,9 @@ from prepare_2024_2025_dataset import (
 )
 
 
-TM_VALUATIONS_FILE = DATA_DIR / "player_valuations.csv"
+TM_VALUATIONS_FILE = RAW_DIR / "player_valuations.csv"
+SEASON_2024_2025_EXTENDED_START = "2024-07-01"
+SEASON_2024_2025_EXTENDED_END = "2025-06-30"
 
 
 @dataclass(frozen=True)
@@ -43,7 +47,7 @@ class SeasonConfig:
 SEASONS = [
     SeasonConfig(
         season="2021_2022",
-        stats_file=DATA_DIR / "2021-2022 Football Player Stats.csv",
+        stats_file=RAW_DIR / "2021-2022 Football Player Stats.csv",
         delimiter=";",
         encoding="latin-1",
         source_is_per90=True,
@@ -53,7 +57,7 @@ SEASONS = [
     ),
     SeasonConfig(
         season="2022_2023",
-        stats_file=DATA_DIR / "2022-2023 Football Player Stats.csv",
+        stats_file=RAW_DIR / "2022-2023 Football Player Stats.csv",
         delimiter=";",
         encoding="latin-1",
         source_is_per90=True,
@@ -63,7 +67,7 @@ SEASONS = [
     ),
     SeasonConfig(
         season="2024_2025",
-        stats_file=DATA_DIR / "players_data-2024_2025.csv",
+        stats_file=RAW_DIR / "players_data-2024_2025.csv",
         delimiter=",",
         encoding="utf-8",
         source_is_per90=False,
@@ -223,6 +227,61 @@ def load_valuations_by_season() -> Dict[str, Dict[int, Dict[str, Any]]]:
     return valuations_by_season
 
 
+def load_extended_valuations_2024_2025() -> Dict[int, Dict[str, Any]]:
+    extended: Dict[int, Dict[str, Any]] = {}
+    with TM_VALUATIONS_FILE.open(newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            player_id = to_int(row.get("player_id"))
+            value = to_int(row.get("market_value_in_eur"))
+            date = row.get("date", "")
+            if player_id is None or value is None or not date:
+                continue
+            if not (SEASON_2024_2025_EXTENDED_START <= date <= SEASON_2024_2025_EXTENDED_END):
+                continue
+            if player_id not in extended or date > extended[player_id]["valuation_date"]:
+                extended[player_id] = {
+                    "market_value_eur": value,
+                    "valuation_date": date,
+                }
+    return extended
+
+
+def resolve_season_valuation(
+    player_id: int,
+    season_values: Dict[int, Dict[str, Any]],
+    extended_values: Optional[Dict[int, Dict[str, Any]]],
+    tm_player: Dict[str, Any],
+    *,
+    allow_current_fallback: bool = False,
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    valuation = season_values.get(player_id)
+    if valuation is not None:
+        return valuation, "season_window"
+
+    if extended_values is not None:
+        valuation = extended_values.get(player_id)
+        if valuation is not None:
+            return valuation, "extended_season_window"
+
+    if allow_current_fallback:
+        current_value = tm_player.get("market_value_in_eur")
+        if current_value is not None:
+            return {
+                "market_value_eur": current_value,
+                "valuation_date": "",
+            }, "current_market_value"
+
+    return None, "none"
+
+
+def finalize_scouting_metrics(row: Dict[str, Any], config: SeasonConfig) -> None:
+    if not config.source_is_per90:
+        return
+    for feature in SCOUTING_X_FEATURES:
+        if row.get(feature) is None:
+            row[feature] = 0.0
+
+
 def base_row(raw: Dict[str, str], config: SeasonConfig) -> Dict[str, Any]:
     player = raw.get("Player", "")
     squad = raw.get("Squad", "")
@@ -237,7 +296,7 @@ def base_row(raw: Dict[str, str], config: SeasonConfig) -> Dict[str, Any]:
         "position": position,
         "position_group": position_group(position),
         "squad": squad,
-        "competition": raw.get("Comp", ""),
+        "competition": normalize_competition(raw.get("Comp", "")),
         "source_file": config.stats_file.name,
         "player_name_norm": normalize_text(player),
         "squad_norm": normalize_text(squad),
@@ -279,6 +338,7 @@ def attach_transfermarkt(
     valuation: Dict[str, Any],
     method: str,
     score: Optional[int],
+    valuation_source: str = "season_window",
 ) -> Dict[str, Any]:
     row["player_id"] = tm_player.get("player_id")
     row["player_name"] = tm_player.get("name") or row.get("fbref_player")
@@ -287,7 +347,10 @@ def attach_transfermarkt(
     row["highest_market_value_in_eur"] = tm_player.get("highest_market_value_in_eur")
     row["market_value_eur"] = valuation.get("market_value_eur")
     row["valuation_date"] = valuation.get("valuation_date", "")
-    row["tm_match_method"] = method
+    if valuation_source == "season_window":
+        row["tm_match_method"] = method
+    else:
+        row["tm_match_method"] = f"{method}+{valuation_source}"
     row["tm_match_score"] = score
     return row
 
@@ -316,7 +379,11 @@ def aggregate_player_seasons(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]
         output = {key: primary.get(key) for key in IDENTITY_COLUMNS}
         output["squad"] = " / ".join(dict.fromkeys(row.get("squad", "") for row in player_rows if row.get("squad")))
         output["competition"] = " / ".join(
-            dict.fromkeys(row.get("competition", "") for row in player_rows if row.get("competition"))
+            dict.fromkeys(
+                normalize_competition(row.get("competition", ""))
+                for row in player_rows
+                if row.get("competition")
+            )
         )
 
         for feature in CANONICAL_TOTAL_FEATURES:
@@ -337,14 +404,17 @@ def aggregate_player_seasons(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 def build_multi_season_rows() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Counter]:
     players_by_id, exact_index, year_index = load_tm_players()
     valuations_by_season = load_valuations_by_season()
+    extended_2024_2025 = load_extended_valuations_2024_2025()
     matched_rows: List[Dict[str, Any]] = []
     unmatched_rows: List[Dict[str, Any]] = []
     stats: Counter = Counter()
 
     for config in SEASONS:
         season_values = valuations_by_season[config.season]
+        extended_values = extended_2024_2025 if config.season == "2024_2025" else None
         for raw in read_stats_csv(config):
             row = normalize_stats_row(raw, config)
+            finalize_scouting_metrics(row, config)
             stats[f"{config.season}_raw_rows"] += 1
 
             player_id, method, score = find_match(
@@ -362,7 +432,14 @@ def build_multi_season_rows() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]
                 stats[f"{config.season}_unmatched"] += 1
                 continue
 
-            valuation = season_values.get(player_id)
+            tm_player = players_by_id[player_id]
+            valuation, valuation_source = resolve_season_valuation(
+                player_id,
+                season_values,
+                extended_values,
+                tm_player,
+                allow_current_fallback=config.season == "2024_2025",
+            )
             if valuation is None:
                 row["player_id"] = player_id
                 row["tm_match_method"] = method
@@ -371,9 +448,18 @@ def build_multi_season_rows() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]
                 stats[f"{config.season}_missing_valuation"] += 1
                 continue
 
-            attach_transfermarkt(row, players_by_id[player_id], valuation, method, score)
+            attach_transfermarkt(
+                row,
+                tm_player,
+                valuation,
+                method,
+                score,
+                valuation_source=valuation_source,
+            )
             matched_rows.append(row)
             stats[f"{config.season}_{method}"] += 1
+            if valuation_source != "season_window":
+                stats[f"{config.season}_{valuation_source}"] += 1
 
     return aggregate_player_seasons(matched_rows), unmatched_rows, stats
 
@@ -393,7 +479,7 @@ def scouting_filter(row: Dict[str, Any]) -> bool:
         return False
     if row.get("Min") is None or row["Min"] < MIN_MINUTES_FOR_MODEL:
         return False
-    return row.get("position_group") != "UNK"
+    return row.get("position_group") not in {"UNK", "GK"}
 
 
 def main() -> None:
@@ -446,7 +532,9 @@ def main() -> None:
         )
         print(
             f"{season}: raw={stats[f'{season}_raw_rows']}, matched_with_value={matched}, "
-            f"unmatched={stats[f'{season}_unmatched']}, missing_valuation={stats[f'{season}_missing_valuation']}"
+            f"unmatched={stats[f'{season}_unmatched']}, missing_valuation={stats[f'{season}_missing_valuation']}, "
+            f"extended_window={stats[f'{season}_extended_season_window']}, "
+            f"current_value_fallback={stats[f'{season}_current_market_value']}"
         )
     print(f"Valuation training rows: {len(model_rows)}")
     print(f"Scouting rows: {len(scouting_rows)}")

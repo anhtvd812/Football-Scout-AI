@@ -1,61 +1,126 @@
 # Football-Scout-AI
 
-## Tong quan du an
-Football-Scout-AI la he thong khoa hoc du lieu va machine learning de danh gia gia tri cau thu va tim "hidden gems". Du an co 2 pipeline chinh:
+Machine learning system for football player **valuation** (regression) and **similarity scouting** (cosine similarity on per-90 stats). Data comes from FBref-style performance tables joined with Transfermarkt market values.
 
-- Dinh gia cau thu (Regression): du doan `market_value_eur` tu thong so hieu suat per 90.
-- Scout tuong dong (Similarity): tim cau thu tre, gia thap co phong cach giong sao muc tieu.
+## Pipelines
 
-Tap du lieu chinh cho hien tai: FBref 2024-2025 ket hop Transfermarkt (players + valuations).
+| Pipeline | Goal | Main output |
+|----------|------|-------------|
+| Valuation | Predict `market_value_eur` from performance + metadata | `predict_player_value()` |
+| Scouting | Find similar players in the same position group | `find_similar_players()` |
 
-## Toi da lam gi
-Da hoan thanh buoc xu ly du lieu de tao tap train dau vao cho team AI:
+Processed datasets and model specs for the AI team: [docs/FEATURES.md](docs/FEATURES.md).
 
-1) Lam sach va chuan hoa du lieu mua 2024-2025
-- Chuyen doi cac cot so, loai ky tu % va dau phay.
-- Parse `Age` va `Born` thanh gia tri so.
-- Tao cot `*_per90` cho cac chi so quan trong (chia tren `90s`, co chan chia 0).
+## Project layout
 
-2) Join Transfermarkt
-- Map cau thu tu FBref sang Transfermarkt bang `name + birth_year`.
-- Co fuzzy match khi khop chinh xac khong thanh cong.
-- Lay market value theo mua 2024-2025, neu thieu thi fallback ve market value hien tai.
+```
+data/raw/              # Input CSVs (not committed)
+data/processed/        # Merged training / scouting files
+models/                # Trained joblib artifacts (regenerate via train script)
+scripts/               # Data prep, train, demo, web launcher
+src/football_scout/    # ML + FastAPI backend
+web/static/            # Dashboard frontend
+```
 
-Script thuc hien:
-- [scripts/prepare_2024_2025_dataset.py](scripts/prepare_2024_2025_dataset.py)
-- [scripts/prepare_multi_season_dataset.py](scripts/prepare_multi_season_dataset.py)
+## Prerequisites
 
-Ket qua sinh ra:
-- `data/processed/player_seasons_merged.csv`: file train model dinh gia multi-season, nen uu tien dung.
-- `data/processed/scouting_features_multi_season.csv`: file scouting multi-season.
-- `data/processed/unmatched_players_multi_season.csv`: cac dong chua match hoac thieu valuation theo mua.
-- `data/processed/players_merged_2024_2025.csv`: file train model dinh gia.
-- `data/processed/scouting_features_2024_2025.csv`: file lam KNN/Cosine Similarity.
-- `data/processed/unmatched_players_2024_2025.csv`: cac dong chua match duoc de QA thu cong.
+- Python 3.10+
+- Raw data in `data/raw/` (see below)
 
-Tai lieu ban giao cho Core AI:
-- [docs/FEATURES.md](docs/FEATURES.md)
+## Setup
 
-## Huong dan chay
-
-### Chay xu ly du lieu
 ```bash
+pip install -r requirements.txt
+```
+
+## Raw data
+
+Download from [Google Drive](https://drive.google.com/drive/folders/1YGc01tisXaiBsYDRdMXkh4BSaamep4HB?usp=drive_link) or Kaggle, then place files under `data/raw/`:
+
+| File | Source |
+|------|--------|
+| `players.csv` | Transfermarkt players |
+| `player_valuations.csv` | Transfermarkt valuations |
+| `players_data-2024_2025.csv` | FBref 2024/25 |
+| `2021-2022 Football Player Stats.csv` | Kaggle / vivovinco (multi-season) |
+| `2022-2023 Football Player Stats.csv` | Kaggle / vivovinco (multi-season) |
+
+`players_data-2025_2026.csv` is not used yet (schema mismatch).
+
+## Run order
+
+### 1. Prepare datasets
+
+From the project root:
+
+```bash
+python scripts/prepare_multi_season_dataset.py
 python scripts/prepare_2024_2025_dataset.py
 ```
 
-### Chay xu ly du lieu nhieu mua
+Writes to `data/processed/`:
+
+- `player_seasons_merged.csv` — valuation training (multi-season, preferred)
+- `scouting_features_multi_season.csv` — similarity (multi-season)
+- `players_merged_2024_2025.csv` — single-season valuation
+- `scouting_features_2024_2025.csv` — single-season scouting
+- `unmatched_players_*.csv` — rows for manual QA
+
+### 2. Train models
+
 ```bash
-python scripts/prepare_multi_season_dataset.py
+python scripts/train_models.py
 ```
 
-Hai script nay chi dung thu vien chuan cua Python, khong can cai them package.
+Saves:
 
-## Data dau vao su dung
-- Link tai data: https://drive.google.com/drive/folders/1YGc01tisXaiBsYDRdMXkh4BSaamep4HB?usp=drive_link
-- [data/players_data-2024_2025.csv](data/players_data-2024_2025.csv) (FBref 2024-2025)
-- [data/players.csv](data/players.csv) (Transfermarkt players)
-- [data/player_valuations.csv](data/player_valuations.csv) (Transfermarkt valuations)
+- `models/valuation_model.joblib`
+- `models/scouting_scaler.joblib`
 
-## Ghi chu
-- Mua 2025-2026 hien tai khong dong nhat schema so voi 2024-2025, vi vay chua duoc dua vao tap train.
-- Co the dieu chinh nguong fuzzy match va bo sung quy tac chuan hoa ten neu can.
+### 3. CLI smoke test (optional)
+
+```bash
+python scripts/demo_inference.py
+```
+
+### 4. Web dashboard
+
+```bash
+python scripts/run_web.py
+```
+
+Open http://127.0.0.1:8000
+
+The UI calls the same inference functions as the Python API below.
+
+## API (backend)
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /health` | Health check |
+| `GET /api/players?q=` | Player name autocomplete |
+| `GET /api/predict?player_name=` | Valuation |
+| `GET /api/similar?player_name=&max_price=&max_age=&top_k=` | Similar players |
+
+## Python usage
+
+```python
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path("src").resolve()))
+
+from football_scout import predict_player_value, find_similar_players
+
+predict_player_value("Xavi Simons")
+find_similar_players("Kevin De Bruyne", max_price=30_000_000, max_age=25, top_k=5)
+```
+
+Models are loaded from `models/`; if missing, they are trained on first call.
+
+## Notes
+
+- Multi-season valuation uses features available across 2021/22, 2022/23, and 2024/25 (no `xG` in older seasons).
+- Scouting defaults to season `2024_2025`; comparisons are within the same `position_group`.
+- Goalkeepers are excluded from valuation and scouting outputs.
+- Tune fuzzy matching in `scripts/prepare_2024_2025_dataset.py` (`FUZZY_THRESHOLD`).

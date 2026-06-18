@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Football Scout AI</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="bg"></div>
+    <main class="container">
+      <header class="hero card">
+        <h1>Football Scout AI</h1>
+        <p class="subtitle">Player valuation and similarity scouting</p>
+      </header>
+
+      <section class="grid">
+        <article class="card">
+          <h2>Predict Player Value</h2>
+          <div class="field">
+            <label for="valuation-player">Player name</label>
+            <input id="valuation-player" list="player-list" placeholder="e.g. Xavi Simons" />
+          </div>
+          <button id="predict-btn" class="btn">Predict</button>
+          <div id="valuation-result" class="result"></div>
+        </article>
+
+        <article class="card">
+          <h2>Find Similar Players</h2>
+          <div class="field">
+            <label for="similar-player">Target player</label>
+            <input id="similar-player" list="player-list" placeholder="e.g. Kevin De Bruyne" />
+          </div>
+          <div class="row">
+            <div class="field">
+              <label for="max-price">Max price (EUR)</label>
+              <input id="max-price" type="number" min="0" step="1000000" placeholder="30000000" />
+            </div>
+            <div class="field">
+              <label for="max-age">Max age</label>
+              <input id="max-age" type="number" min="0" max="50" placeholder="25" />
+            </div>
+            <div class="field">
+              <label for="top-k">Top K</label>
+              <input id="top-k" type="number" min="1" max="20" value="5" />
+            </div>
+          </div>
+          <button id="similar-btn" class="btn">Search</button>
+          <div id="similar-result" class="result"></div>
+        </article>
+      </section>
+
+      <datalist id="player-list"></datalist>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

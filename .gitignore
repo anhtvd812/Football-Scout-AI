@@ -217,5 +217,6 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Streamlit
-.streamlit/secrets.toml
+# Trained model artifacts (regenerate with scripts/train_models.py)
+models/
+
