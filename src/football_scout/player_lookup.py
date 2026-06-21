@@ -30,6 +30,7 @@ def resolve_player_row(
     player_name: str,
     *,
     season: Optional[str] = DEFAULT_SCOUTING_SEASON,
+    allow_season_fallback: bool = True,
 ) -> pd.Series:
     if df.empty:
         raise ValueError("Dataset is empty.")
@@ -59,6 +60,8 @@ def resolve_player_row(
         season_match = _find_match(df[df["season"] == season])
         if season_match is not None:
             return season_match
+        if not allow_season_fallback:
+            raise ValueError(f"Could not find player '{player_name}' for season '{season}'.")
 
     fallback = _find_match(df)
     if fallback is not None:

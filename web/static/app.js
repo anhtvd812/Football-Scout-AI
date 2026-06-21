@@ -6,12 +6,51 @@ const similarResult = byId('similar-result');
 
 const eur = (v) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(v ?? 0);
 
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[ch]);
+}
+
 function statusBadge(status) {
   const st = (status || '').toLowerCase();
   let cls = 'warn';
   if (st.includes('undervalued')) cls = 'ok';
   if (st.includes('overvalued')) cls = 'bad';
   return `<span class="badge ${cls}">${status}</span>`;
+}
+
+function explanationBlock(explanation) {
+  if (!explanation) return '';
+  const positive = explanation.positive_factors || [];
+  const caution = explanation.caution_factors || [];
+  const notes = explanation.notes || [];
+
+  const list = (items) => items.length
+    ? `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`
+    : '<p class="small">No major rule-based signal found.</p>';
+
+  return `
+    <div class="explanation">
+      <h3>Why this valuation?</h3>
+      <p class="small">${escapeHtml(explanation.summary)}</p>
+      <div class="explain-grid">
+        <div>
+          <p class="small label-strong">Positive signals</p>
+          ${list(positive)}
+        </div>
+        <div>
+          <p class="small label-strong">Caution signals</p>
+          ${list(caution)}
+        </div>
+      </div>
+      ${notes.length ? `<div class="note-list"><p class="small label-strong">Notes</p>${list(notes)}</div>` : ''}
+    </div>
+  `;
 }
 
 async function fetchJson(url) {
@@ -34,12 +73,13 @@ async function onPredict() {
     const result = await fetchJson(`/api/predict?player_name=${encodeURIComponent(player)}`);
     valuationResult.innerHTML = `
       <div class="kv">
-        <div><p class="small">Player</p><strong>${result.player_name}</strong></div>
-        <div><p class="small">Position / Age</p><strong>${result.position} / ${result.age ?? '-'} </strong></div>
+        <div><p class="small">Player</p><strong>${escapeHtml(result.player_name)}</strong></div>
+        <div><p class="small">Position / Age</p><strong>${escapeHtml(result.position)} / ${result.age ?? '-'} </strong></div>
         <div><p class="small">Predicted Value</p><strong>${eur(result.predicted_value_eur)}</strong></div>
         <div><p class="small">Actual Market Value</p><strong>${eur(result.actual_market_value_eur)}</strong></div>
       </div>
       <p class="small" style="margin-top:10px">${statusBadge(result.market_status)}</p>
+      ${explanationBlock(result.explanation)}
     `;
   } catch (err) {
     valuationResult.innerHTML = `<p class="error">${err.message}</p>`;
@@ -66,10 +106,10 @@ async function onSimilar() {
     }
     const rows = result.results.map((r) => `
       <tr>
-        <td>${r.name}</td>
-        <td>${r.position}</td>
+        <td>${escapeHtml(r.name)}</td>
+        <td>${escapeHtml(r.position)}</td>
         <td>${r.age ?? '-'}</td>
-        <td>${r.club ?? '-'}</td>
+        <td>${escapeHtml(r.club ?? '-')}</td>
         <td>${eur(r.market_value_eur)}</td>
         <td>${r.similarity_score}</td>
       </tr>
